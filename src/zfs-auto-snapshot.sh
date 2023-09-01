@@ -43,6 +43,7 @@ opt_pre_snapshot=''
 opt_post_snapshot=''
 opt_do_snapshots=1
 opt_min_size=0
+opt_no_include_date=0
 
 # Global summary statistics.
 DESTRUCTION_COUNT='0'
@@ -56,25 +57,26 @@ SNAPSHOTS_OLD=''
 print_usage ()
 {
 	echo "Usage: $0 [options] [-l label] <'//' | name [name...]>
-  --default-exclude  Exclude datasets if com.sun:auto-snapshot is unset.
-  -d, --debug        Print debugging messages.
-  -e, --event=EVENT  Set the com.sun:auto-snapshot-desc property to EVENT.
-      --fast         Use a faster zfs list invocation.
-  -n, --dry-run      Print actions without actually doing anything.
-  -s, --skip-scrub   Do not snapshot filesystems in scrubbing pools.
-  -h, --help         Print this usage message.
-  -k, --keep=NUM     Keep NUM recent snapshots and destroy older snapshots.
-  -l, --label=LAB    LAB is usually 'hourly', 'daily', or 'monthly'.
-  -p, --prefix=PRE   PRE is 'zfs-auto-snap' by default.
-  -q, --quiet        Suppress warnings and notices at the console.
-      --send-full=F  Send zfs full backup. Unimplemented.
-      --send-incr=F  Send zfs incremental backup. Unimplemented.
-      --sep=CHAR     Use CHAR to separate date stamps in snapshot names.
-  -g, --syslog       Write messages into the system log.
-  -r, --recursive    Snapshot named filesystem and all descendants.
-  -v, --verbose      Print info messages.
-      --destroy-only Only destroy older snapshots, do not create new ones.
-      name           Filesystem and volume names, or '//' for all ZFS datasets.
+  --default-exclude      Exclude datasets if com.sun:auto-snapshot is unset.
+  -d, --debug            Print debugging messages.
+  -D, --no-include-date  Does not add the date and time to the snapshot name. Forces --keep=1 and --sep has no effect.
+  -e, --event=EVENT      Set the com.sun:auto-snapshot-desc property to EVENT.
+      --fast             Use a faster zfs list invocation.
+  -n, --dry-run          Print actions without actually doing anything.
+  -s, --skip-scrub       Do not snapshot filesystems in scrubbing pools.
+  -h, --help             Print this usage message.
+  -k, --keep=NUM         Keep NUM recent snapshots and destroy older snapshots.
+  -l, --label=LAB        LAB is usually 'hourly', 'daily', or 'monthly'.
+  -p, --prefix=PRE       PRE is 'zfs-auto-snap' by default.
+  -q, --quiet            Suppress warnings and notices at the console.
+      --send-full=F      Send zfs full backup. Unimplemented.
+      --send-incr=F      Send zfs incremental backup. Unimplemented.
+      --sep=CHAR         Use CHAR to separate date stamps in snapshot names.
+  -g, --syslog           Write messages into the system log.
+  -r, --recursive        Snapshot named filesystem and all descendants.
+  -v, --verbose          Print info messages.
+      --destroy-only     Only destroy older snapshots, do not create new ones.
+      name               Filesystem and volume names, or '//' for all ZFS datasets.
 " 
 }
 
@@ -233,10 +235,10 @@ fi
 GETOPT=$($GETOPT_BIN \
   --longoptions=default-exclude,dry-run,fast,skip-scrub,recursive \
   --longoptions=event:,keep:,label:,prefix:,sep: \
-  --longoptions=debug,help,quiet,syslog,verbose \
+  --longoptions=debug,no-include-date,help,quiet,syslog,verbose \
   --longoptions=pre-snapshot:,post-snapshot:,destroy-only \
   --longoptions=min-size: \
-  --options=dnshe:l:k:p:rs:qgvm: \
+  --options=dDnshe:l:k:p:rs:qgvm: \
   -- "$@" ) \
   || exit 128
 
@@ -251,6 +253,10 @@ do
 			opt_verbose='1'
 			shift 1
 			;;
+                (-D|--no-include-date)
+                        opt_no_include_date='1'
+                        shift 1
+                        ;;
 		(--default-exclude)
 			opt_default_exclude='1'
 			shift 1
@@ -391,6 +397,11 @@ fi
 # These are the only times that `zpool status` or `zfs list` are invoked, so
 # this program for Linux has a much better runtime complexity than the similar
 # Solaris implementation.
+
+if [ "$opt_no_include_date" -eq '1' ]
+then
+	opt_keep=1
+fi
 
 ZPOOL_STATUS=$(env LC_ALL=C zpool status 2>&1 ) \
   || { print_log error "zpool status $?: $ZPOOL_STATUS"; exit 135; }
@@ -585,13 +596,26 @@ SNAPPROP="-o com.sun:auto-snapshot-desc='$opt_event'"
 # ISO style date; fifteen characters: YYYY-MM-DD-HHMM
 # On Solaris %H%M expands to 12h34.
 # We use the shortfirm -u here because --utc is not supported on macos.
-DATE=$(date -u +%F-%H%M)
+if [ "$opt_no_include_date" -eq 0 ]
+then
+	DATE=$(date -u +%F-%H%M)
+fi
 
 # The snapshot name after the @ symbol.
-SNAPNAME="${opt_prefix:+$opt_prefix$opt_sep}${opt_label:+$opt_label}-$DATE"
+if [ "$opt_no_include_date" -eq 0 ]
+then
+	SNAPNAME="${opt_prefix:+$opt_prefix$opt_sep}${opt_label:+$opt_label}-$DATE"
+else
+        SNAPNAME="${opt_prefix:+$opt_prefix$opt_sep}${opt_label:+$opt_label}"
+fi
 
 # The expression for matching old snapshots.  -YYYY-MM-DD-HHMM
-SNAPGLOB="${opt_prefix:+$opt_prefix$opt_sep}${opt_label:+$opt_label}-???????????????"
+if [ "$opt_no_include_date" -eq 0 ]
+then
+	SNAPGLOB="${opt_prefix:+$opt_prefix$opt_sep}${opt_label:+$opt_label}-???????????????"
+else
+	SNAPGLOB="${opt_prefix:+$opt_prefix$opt_sep}${opt_label:+$opt_label}"
+fi
 
 if [ -n "$opt_do_snapshots" ]
 then
